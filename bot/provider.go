@@ -1,7 +1,5 @@
 package bot
 
-import _ "unsafe"
-
 import (
 	"context"
 	"errors"
@@ -9,10 +7,13 @@ import (
 	"reflect"
 	"sync"
 	"time"
+	_ "unsafe"
 
 	"github.com/df-mc/atomic"
 	"github.com/df-mc/dragonfly/server/block"
 	"github.com/df-mc/dragonfly/server/block/cube"
+	"github.com/df-mc/dragonfly/server/item"
+	"github.com/df-mc/dragonfly/server/world"
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
 	"github.com/goxiaoy/go-eventbus"
@@ -22,6 +23,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
+
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 )
@@ -38,6 +40,7 @@ type PlayerStatus struct {
 	flyLock      sync.Mutex
 	breakLock    sync.Mutex
 	teleportChan chan any
+	inputTick    atomic.Uint64
 	PlayerName   string
 	CurrentForm  *Form
 	GameMode     int
@@ -259,20 +262,80 @@ func (c *Client) OpenInventory() {
 	})
 }
 
+func buildUseItemTransaction(blockPos cube.Pos, targetPos cube.Pos, face cube.Face, hotbarSlot int, stack item.Stack, playerPos mgl32.Vec3, blockRuntimeID uint32) protocol.UseItemTransactionData {
+	return protocol.UseItemTransactionData{
+		ActionType:       protocol.UseItemActionClickBlock,
+		TriggerType:      protocol.TriggerTypePlayerInput,
+		BlockPosition:    protocol.BlockPos{int32(blockPos.X()), int32(blockPos.Y()), int32(blockPos.Z())},
+		BlockFace:        int32(face),
+		ClickedPosition:  clickedPosition(face),
+		HeldItem:         InstanceFromItem(stack),
+		HotBarSlot:       int32(hotbarSlot),
+		Position:         playerPos,
+		BlockRuntimeID:   blockRuntimeID,
+		ClientPrediction: protocol.ClientPredictionSuccess,
+	}
+}
+
 func (c *Client) PlaceBlock(pos cube.Pos) {
+	support, face, ok := waterPlacementFace(c, pos)
+	if !ok {
+		return
+	}
+
 	hotbarSlot := int(c.Screen.HeldSlot.Load())
 	stack, _ := c.Screen.Inv.Item(hotbarSlot)
+	c.SendCurrentPosition()
 
+	blockRuntimeID := world.BlockRuntimeID(c.World().Block(support))
+	transaction := buildUseItemTransaction(support, pos, face, hotbarSlot, stack, c.Self.Position, blockRuntimeID)
+	c.sendUseItemTransaction(transaction)
+}
+
+func (c *Client) ScoopWater(pos cube.Pos, face cube.Face) {
+	hotbarSlot := int(c.Screen.HeldSlot.Load())
+	stack, _ := c.Screen.Inv.Item(hotbarSlot)
+	c.SendCurrentPosition()
+
+	blockRuntimeID := world.BlockRuntimeID(c.World().Block(pos))
+	transaction := buildUseItemTransaction(pos, pos, face, hotbarSlot, stack, c.Self.Position, blockRuntimeID)
+	c.sendUseItemTransaction(transaction)
+}
+
+func (c *Client) sendUseItemTransaction(transaction protocol.UseItemTransactionData) {
+	c.Logger.Infof("send UseItemTransaction: action=%d trigger=%d blockPos=%v face=%d hotbar=%d held=%v playerPos=%v clicked=%v blockRID=%d",
+		transaction.ActionType,
+		transaction.TriggerType,
+		transaction.BlockPosition,
+		transaction.BlockFace,
+		transaction.HotBarSlot,
+		transaction.HeldItem,
+		transaction.Position,
+		transaction.ClickedPosition,
+		transaction.BlockRuntimeID,
+	)
 	c.Conn.WritePacket(&packet.InventoryTransaction{
-		TransactionData: &protocol.UseItemTransactionData{
-			ActionType:      protocol.UseItemActionClickBlock,
-			BlockPosition:   protocol.BlockPos{int32(pos.X()), int32(pos.Y()), int32(pos.Z())},
-			BlockFace:       int32(0),
-			ClickedPosition: mgl32.Vec3{0.5, 0.5, 0.5},
-			HeldItem:        InstanceFromItem(stack),
-			HotBarSlot:      int32(hotbarSlot),
-		},
+		TransactionData: &transaction,
 	})
+}
+
+func clickedPosition(face cube.Face) mgl32.Vec3 {
+	switch face {
+	case cube.FaceDown:
+		return mgl32.Vec3{0.5, 0, 0.5}
+	case cube.FaceUp:
+		return mgl32.Vec3{0.5, 1, 0.5}
+	case cube.FaceNorth:
+		return mgl32.Vec3{0.5, 0.5, 0}
+	case cube.FaceSouth:
+		return mgl32.Vec3{0.5, 0.5, 1}
+	case cube.FaceWest:
+		return mgl32.Vec3{0, 0.5, 0.5}
+	case cube.FaceEast:
+		return mgl32.Vec3{1, 0.5, 0.5}
+	default:
+		return mgl32.Vec3{0.5, 0.5, 0.5}
+	}
 }
 
 func (c *Client) SendFormResponse(data string) {

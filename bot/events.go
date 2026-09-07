@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
+	_ "unsafe"
+
 	"github.com/df-mc/dragonfly/server/block/cube"
 	"github.com/df-mc/dragonfly/server/world"
 	_ "github.com/df-mc/dragonfly/server/world"
@@ -15,8 +18,6 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"github.com/sandertv/gophertunnel/minecraft/text"
 	log "github.com/sirupsen/logrus"
-	"time"
-	_ "unsafe"
 )
 
 type EventsListener struct {
@@ -142,7 +143,11 @@ func (e EventsListener) Attach(c *Client) {
 				if err != nil {
 					break
 				}
-				pos := cube.Pos{int(bNBT["x"].(int32)), int(bNBT["y"].(int32)), int(bNBT["z"].(int32))}
+				pos, ok := nbtBlockPos(bNBT)
+				if !ok {
+					log.Warn("skipping block entity NBT without valid coordinates")
+					continue
+				}
 				bEnts[pos] = bNBT
 			}
 
@@ -327,13 +332,52 @@ func (e *EventsListener) ReadChunk(c *Client, p *packet.LevelChunk) error {
 		if err != nil {
 			break
 		}
-		pos := cube.Pos{int(bNBT["x"].(int32)), int(bNBT["y"].(int32)), int(bNBT["z"].(int32))}
+		pos, ok := nbtBlockPos(bNBT)
+		if !ok {
+			log.Warn("skipping block entity NBT without valid coordinates")
+			continue
+		}
 		bEnts[pos] = bNBT
 	}
 
 	c.world.setChunk(world.ChunkPos(p.Position), ch, bEnts)
 
 	return nil
+}
+
+func nbtBlockPos(data map[string]any) (cube.Pos, bool) {
+	x, okX := nbtInt(data["x"])
+	y, okY := nbtInt(data["y"])
+	z, okZ := nbtInt(data["z"])
+	if !okX || !okY || !okZ {
+		return cube.Pos{}, false
+	}
+	return cube.Pos{x, y, z}, true
+}
+
+func nbtInt(value any) (int, bool) {
+	switch value := value.(type) {
+	case int:
+		return value, true
+	case int8:
+		return int(value), true
+	case int16:
+		return int(value), true
+	case int32:
+		return int(value), true
+	case int64:
+		return int(value), true
+	case uint8:
+		return int(value), true
+	case uint16:
+		return int(value), true
+	case uint32:
+		return int(value), true
+	case uint64:
+		return int(value), true
+	default:
+		return 0, false
+	}
 }
 
 func (c *Client) World() *World {

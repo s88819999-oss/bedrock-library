@@ -877,7 +877,7 @@ func (m *ScreenManager) SetCarriedItem(s int) {
 	m.c.Conn.WritePacket(&packet.MobEquipment{
 		EntityRuntimeID: m.c.Self.EntityRuntimeID,
 		NewItem:         InstanceFromItem(stack),
-		InventorySlot:   0,
+		InventorySlot:   byte(s),
 		HotBarSlot:      byte(s),
 		WindowID:        protocol.WindowIDInventory,
 	})

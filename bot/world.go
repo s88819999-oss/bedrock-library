@@ -1,6 +1,10 @@
 package bot
 
 import (
+	"math"
+	"sync"
+	_ "unsafe"
+
 	"github.com/df-mc/dragonfly/server/block/cube"
 	"github.com/df-mc/dragonfly/server/world"
 	_ "github.com/df-mc/dragonfly/server/world"
@@ -10,9 +14,6 @@ import (
 	"github.com/go-gl/mathgl/mgl64"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"golang.org/x/exp/maps"
-	"math"
-	"sync"
-	_ "unsafe"
 )
 
 type World struct {
@@ -67,7 +68,7 @@ func (w *World) Block(pos cube.Pos) world.Block {
 	c.Lock()
 	defer c.Unlock()
 
-	rid := c.Block(uint8(pos[0]), int16(pos[1]), uint8(pos[2]), 0)
+	rid := c.Block(uint8(pos[0]&15), int16(pos[1]), uint8(pos[2]&15), 0)
 	b, _ := world.BlockByRuntimeID(rid)
 
 	return b
@@ -134,7 +135,7 @@ func (w *World) setBlock(pos cube.Pos, rid uint32) uint32 {
 	//log.Info("locked")
 	defer c.Unlock()
 
-	c.SetBlock(uint8(pos.X()), int16(pos.Y()), uint8(pos.Z()), 0, rid)
+	c.SetBlock(uint8(pos.X()&15), int16(pos.Y()), uint8(pos.Z()&15), 0, rid)
 	return rid
 }
 func (w *World) Biome(pos cube.Pos) world.Biome {

@@ -112,7 +112,7 @@ func (c *Client) WalkTo(position mgl32.Vec3) {
 		fmt.Println(path)
 		time.Sleep(25 * time.Millisecond)
 	}
-	c.Self.Position = position
+	c.Self.Position = mgl32.Vec3{position.X(), position.Y() + 1.62, position.Z()}
 }
 func FromBlockPos(v mgl32.Vec3) mgl32.Vec3 {
 	newX := math.Floor(float64(v.X()))
@@ -148,6 +148,7 @@ func (c *Client) SendCurrentPosition() {
 		Pitch:     c.Self.Pitch,
 		Yaw:       c.Self.Yaw,
 		HeadYaw:   c.Self.HeadYaw,
+		Tick:      c.inputTick.Add(1),
 	})
 }
 
@@ -163,6 +164,7 @@ func (c *Client) SendInputData(flags ...int) {
 		Pitch:     c.Self.Pitch,
 		Yaw:       c.Self.Yaw,
 		HeadYaw:   c.Self.HeadYaw,
+		Tick:      c.inputTick.Add(1),
 	})
 }
 
@@ -173,6 +175,7 @@ func (c *Client) SendCustomPosition(position mgl32.Vec3) {
 		Pitch:     c.Self.Pitch,
 		Yaw:       c.Self.Yaw,
 		HeadYaw:   c.Self.HeadYaw,
+		Tick:      c.inputTick.Add(1),
 	})
 }
 
