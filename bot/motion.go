@@ -133,17 +133,28 @@ func (c *Client) WalkTo(position mgl32.Vec3) {
 // single large jump that gets rejected/corrected.
 func (c *Client) stepTowards(target mgl32.Vec3) {
 	for {
-		delta := target.Sub(c.Self.Position)
-		dist := delta.Len()
-		if dist <= maxWalkStepPerTick {
-			c.Self.Position = target
-			c.SendCurrentPosition()
+		next, arrived := nextWalkStep(c.Self.Position, target, maxWalkStepPerTick)
+		c.Self.Position = next
+		c.SendCurrentPosition()
+		if arrived {
 			return
 		}
-		c.Self.Position = c.Self.Position.Add(delta.Mul(maxWalkStepPerTick / dist))
-		c.SendCurrentPosition()
 		time.Sleep(walkTickInterval)
 	}
+}
+
+// nextWalkStep computes the position after moving from current towards
+// target by at most maxStep. If the remaining distance is within maxStep,
+// it returns target exactly and reports arrived as true. This is a pure
+// function so the walking speed cap can be unit tested without a live
+// network connection.
+func nextWalkStep(current, target mgl32.Vec3, maxStep float32) (next mgl32.Vec3, arrived bool) {
+	delta := target.Sub(current)
+	dist := delta.Len()
+	if dist <= maxStep {
+		return target, true
+	}
+	return current.Add(delta.Mul(maxStep / dist)), false
 }
 func FromBlockPos(v mgl32.Vec3) mgl32.Vec3 {
 	newX := math.Floor(float64(v.X()))
