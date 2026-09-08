@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"fmt"
 	"iter"
 	"math"
 	"slices"
@@ -104,15 +103,47 @@ func (c *Client) FlyTo(position mgl32.Vec3) {
 	c.flyLock.Lock()
 	c.internalFlyTo(position)
 }
+// walkTickInterval matches the server's tick rate (20 ticks/second) so that
+// position updates sent via PlayerAuthInput look like normal, physically
+// plausible movement instead of teleports.
+const walkTickInterval = 50 * time.Millisecond
+
+// maxWalkStepPerTick caps how far the position can move in a single tick,
+// approximating vanilla walking speed (~4.3 blocks/second). Servers that
+// perform server-authoritative movement validation (common on anti-cheat
+// setups such as the one this library targets) will reject or silently
+// correct any PlayerAuthInput that reports a larger jump than this, which
+// previously caused WalkTo to have no effect at all: the bot's position was
+// snapped back by the server on every MovePlayer correction.
+const maxWalkStepPerTick = 0.2158
+
 func (c *Client) WalkTo(position mgl32.Vec3) {
 	pos := cube.Pos{int(position[0]), int(position[1]), int(position[2])}
 	paths := c.FindPath(pos)
 	for _, path := range paths {
-		c.SendCustomPosition(mgl32.Vec3{float32(path[0]) + 0.5, float32(path[1]) + 1.62, float32(path[2]) + 0.5})
-		fmt.Println(path)
-		time.Sleep(25 * time.Millisecond)
+		target := mgl32.Vec3{float32(path[0]) + 0.5, float32(path[1]) + 1.62, float32(path[2]) + 0.5}
+		c.stepTowards(target)
 	}
-	c.Self.Position = mgl32.Vec3{position.X(), position.Y() + 1.62, position.Z()}
+	c.stepTowards(mgl32.Vec3{position.X(), position.Y() + 1.62, position.Z()})
+}
+
+// stepTowards moves c.Self.Position towards target in increments no larger
+// than maxWalkStepPerTick, sending a PlayerAuthInput each tick, so the
+// server's movement validation sees a realistic walking speed rather than a
+// single large jump that gets rejected/corrected.
+func (c *Client) stepTowards(target mgl32.Vec3) {
+	for {
+		delta := target.Sub(c.Self.Position)
+		dist := delta.Len()
+		if dist <= maxWalkStepPerTick {
+			c.Self.Position = target
+			c.SendCurrentPosition()
+			return
+		}
+		c.Self.Position = c.Self.Position.Add(delta.Mul(maxWalkStepPerTick / dist))
+		c.SendCurrentPosition()
+		time.Sleep(walkTickInterval)
+	}
 }
 func FromBlockPos(v mgl32.Vec3) mgl32.Vec3 {
 	newX := math.Floor(float64(v.X()))

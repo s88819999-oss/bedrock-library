@@ -176,7 +176,7 @@ func (c *Client) AutoFillCobblestoneStairs(ctx context.Context, center cube.Pos,
 		if !waitContext(ctx, 250*time.Millisecond) {
 			return ctx.Err()
 		}
-		if !waitForWater(ctx, c, pos, 2*time.Second) {
+		if !waitForWaterPlacementConfirmation(ctx, c, pos, waterSlot, 2*time.Second) {
 			c.Logger.Warnf("放水未確認成功，位置=%v", pos)
 			continue
 		}
@@ -193,6 +193,10 @@ func (c *Client) AutoFillCobblestoneStairs(ctx context.Context, center cube.Pos,
 		name, _ := c.World().Block(pos).EncodeBlock()
 		return name
 	}, targets) {
+		if completed == len(targets) {
+			c.Logger.Warnf("世界快取未能確認所有水方塊，但背包狀態已確認完成 %d/%d 次放置", completed, len(targets))
+			return nil
+		}
 		return fmt.Errorf("water placement incomplete: %d/%d targets confirmed", completed, len(targets))
 	}
 	return nil
@@ -226,6 +230,89 @@ func waitForWater(ctx context.Context, c *Client, pos cube.Pos, timeout time.Dur
 	}
 }
 
+func waitForWaterPlacementConfirmation(ctx context.Context, c *Client, pos cube.Pos, waterSlot int, timeout time.Duration) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if nearbyWaterFound(c, pos, 0) {
+			return true
+		}
+		if slotIsNoLongerWaterBucket(c, waterSlot) {
+			// The bucket was consumed by the server, but the world cache at pos
+			// hasn't reflected a water block yet (block update packets can lag
+			// slightly behind the inventory update). Give it a short grace
+			// period and check a small neighbourhood before trusting the
+			// bucket-depletion alone, since bucket usage does not guarantee
+			// the block placement itself succeeded (e.g. the target cell may
+			// have turned out to already be solid).
+			return waitForNearbyWater(ctx, c, pos, 1, time.Second)
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+// nearbyWaterFound reports whether any block within radius blocks of pos
+// (inclusive) currently has a name containing "water".
+func nearbyWaterFound(c *Client, pos cube.Pos, radius int) bool {
+	if c.World() == nil {
+		return false
+	}
+	for dx := -radius; dx <= radius; dx++ {
+		for dy := -radius; dy <= radius; dy++ {
+			for dz := -radius; dz <= radius; dz++ {
+				p := cube.Pos{pos.X() + dx, pos.Y() + dy, pos.Z() + dz}
+				name, _ := c.World().Block(p).EncodeBlock()
+				if strings.Contains(name, "water") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// waitForNearbyWater polls nearbyWaterFound until a water block appears near
+// pos, the timeout elapses, or the context is cancelled.
+func waitForNearbyWater(ctx context.Context, c *Client, pos cube.Pos, radius int, timeout time.Duration) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if nearbyWaterFound(c, pos, radius) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+func slotIsNoLongerWaterBucket(c *Client, slot int) bool {
+	if c == nil || c.Screen == nil || slot < 0 || slot >= len(c.Screen.Inv.Slots()) {
+		return false
+	}
+	stack, err := c.Screen.Inv.Item(slot)
+	if err != nil || stack.Empty() {
+		return false
+	}
+	name, _ := stack.Item().EncodeItem()
+	return !isWaterBucketName(name)
+}
+
 func (c *Client) ensureWaterBucket(ctx context.Context, radius int) error {
 	if slot, err := findWaterBucket(c); err == nil {
 		c.Screen.SetCarriedItem(slot)
@@ -253,27 +340,36 @@ func (c *Client) ensureWaterBucket(ctx context.Context, radius int) error {
 	}
 	c.Logger.Infof("開始舀水，位置=%v", source)
 	c.ScoopWater(source, scoopFace)
+	for attempts := 1; attempts <= 3; attempts++ {
+		if waitForWaterBucket(ctx, c, 3*time.Second) {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempts == 3 {
+			return fmt.Errorf("water bucket was not refilled from source %v after %d attempts", source, attempts)
+		}
+		c.Logger.Warnf("舀水未成功，重試第 %d 次，位置=%v", attempts+1, source)
+		c.ScoopWater(source, scoopFace)
+	}
+	return nil
+}
 
-	deadline := time.NewTimer(3 * time.Second)
+func waitForWaterBucket(ctx context.Context, c *Client, timeout time.Duration) bool {
+	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
-	attempts := 1
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		if _, err := findWaterBucket(c); err == nil {
-			return nil
+			return true
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return false
 		case <-deadline.C:
-			if attempts >= 3 {
-				return fmt.Errorf("water bucket was not refilled from source %v after %d attempts", source, attempts)
-			}
-			attempts++
-			c.Logger.Warnf("舀水未成功，重試第 %d 次，位置=%v", attempts, source)
-			c.ScoopWater(source, scoopFace)
-			deadline = time.NewTimer(2 * time.Second)
+			return false
 		case <-ticker.C:
 		}
 	}
