@@ -295,7 +295,6 @@ func (h *itemStackRequestHandler) verifySlots(s *ScreenManager, slots ...protoco
 
 // verifySlot checks if the slot passed by the client is the same as that expected by the server.
 func (h *itemStackRequestHandler) verifySlot(slot protocol.StackRequestSlotInfo, s *ScreenManager) error {
-	return nil
 	if err := h.tryAcknowledgeChanges(s, slot); err != nil {
 		return err
 	}

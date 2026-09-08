@@ -31,7 +31,9 @@ var itemTagsFile []byte
 var itemTags map[string][]string
 
 func init() {
-	json.Unmarshal(itemTagsFile, &itemTags)
+	if err := json.Unmarshal(itemTagsFile, &itemTags); err != nil {
+		panic(fmt.Errorf("decode embedded item tags: %w", err))
+	}
 }
 
 // TODO: containerID getter
@@ -965,45 +967,31 @@ func (m *ScreenManager) invByID(id int32) (*inventory.Inventory, bool) {
 	case protocol.ContainerAnvilInput, protocol.ContainerAnvilMaterial:
 		if m.ContainerOpened.Load() {
 			return m.UI, true
-			if _, anvil := m.c.World().Block(m.OpenedPos.Load()).(block.Anvil); anvil {
-			}
 		}
 	case protocol.ContainerSmithingTableInput, protocol.ContainerSmithingTableMaterial:
 		if m.ContainerOpened.Load() {
 			return m.UI, true
-			if _, smithing := m.c.World().Block(m.OpenedPos.Load()).(block.SmithingTable); smithing {
-			}
 		}
 	case protocol.ContainerLoomInput, protocol.ContainerLoomDye, protocol.ContainerLoomMaterial:
 		if m.ContainerOpened.Load() {
 			return m.UI, true
-			if _, loom := m.c.World().Block(m.OpenedPos.Load()).(block.Loom); loom {
-			}
 		}
 	case protocol.ContainerStonecutterInput:
 		if m.ContainerOpened.Load() {
 			return m.UI, true
-			if _, ok := m.c.World().Block(m.OpenedPos.Load()).(block.Stonecutter); ok {
-			}
 		}
 	case protocol.ContainerGrindstoneInput, protocol.ContainerGrindstoneAdditional:
 		if m.ContainerOpened.Load() {
 			return m.UI, true
-			if _, ok := m.c.World().Block(m.OpenedPos.Load()).(block.Grindstone); ok {
-			}
 		}
 	case protocol.ContainerEnchantingInput, protocol.ContainerEnchantingMaterial:
 		if m.ContainerOpened.Load() {
 			return m.UI, true
-			if _, enchanting := m.c.World().Block(m.OpenedPos.Load()).(block.EnchantingTable); enchanting {
-			}
 		}
 	case protocol.ContainerFurnaceIngredient, protocol.ContainerFurnaceFuel, protocol.ContainerFurnaceResult,
 		protocol.ContainerBlastFurnaceIngredient, protocol.ContainerSmokerIngredient:
 		if m.ContainerOpened.Load() {
 			return m.OpenedWindow.Load(), true
-			if _, ok := m.c.World().Block(m.OpenedPos.Load()).(smelter); ok {
-			}
 		}
 	}
 	return nil, false

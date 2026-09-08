@@ -318,7 +318,6 @@ func AuthMC(token XSTSauth) (MCauth, error) {
 
 // GetMCcredentialsByPassword From 0 to Minecraft Auth with cache using password flow
 func GetMCcredentialsByPassword(username, password string) (*oauth2.Token, error) {
-	var resauth *oauth2.Token
 	refreshToken, err := AuthMSLogin(username, password)
 	if err != nil {
 		return nil, err
@@ -333,5 +332,4 @@ func GetMCcredentialsByPassword(username, password string) (*oauth2.Token, error
 		RefreshToken: m.RefreshToken,
 		Expiry:       time.UnixMilli(m.ExpiresAfter),
 	}, nil
-	return resauth, nil
 }
