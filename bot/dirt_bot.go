@@ -159,16 +159,20 @@ func isDigTarget(name string) bool {
 
 func standingBeside(c *Client, target cube.Pos) (cube.Pos, bool) {
 	finder := Finder[cube.Pos]{w: c.World(), c: c, allowFlight: false}
-	for _, stand := range []cube.Pos{
+	candidates := []cube.Pos{
 		{target.X() + 1, target.Y(), target.Z()},
 		{target.X() - 1, target.Y(), target.Z()},
 		{target.X(), target.Y(), target.Z() + 1},
 		{target.X(), target.Y(), target.Z() - 1},
 		{target.X(), target.Y() + 1, target.Z()},
-	} {
+	}
+	for _, stand := range candidates {
 		if finder.AllowStanding(stand) {
 			return stand, true
 		}
+	}
+	if c.Logger != nil {
+		c.Logger.Infof("standingBeside: no valid stand found near target=%v candidates=%v", target, candidates)
 	}
 	return cube.Pos{}, false
 }

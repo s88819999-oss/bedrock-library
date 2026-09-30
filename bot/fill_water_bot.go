@@ -323,9 +323,26 @@ func (c *Client) ensureWaterBucket(ctx context.Context, radius int) error {
 	if err != nil {
 		return err
 	}
-	source, ok := findNearbyWaterSource(c, radius)
-	if !ok {
+	sources := findNearbyWaterSources(c, radius)
+	if len(sources) == 0 {
 		return fmt.Errorf("no nearby water source found to refill bucket")
+	}
+
+	// Prefer a water source that has a reachable standing spot beside it.
+	// Always picking the single closest source (as findNearbyWaterSource did)
+	// meant that once the closest source turned out to be walled in by solid
+	// blocks on every side, the bot retried that exact same unreachable
+	// source forever, since the player's position (and therefore "closest")
+	// never changed. Trying every candidate in distance order lets the bot
+	// walk to a farther-but-reachable source instead.
+	source := sources[0]
+	var stand cube.Pos
+	standOK := false
+	for _, candidate := range sources {
+		if s, ok := standingBeside(c, candidate); ok {
+			source, stand, standOK = candidate, s, true
+			break
+		}
 	}
 	c.Logger.Infof("前往水源補水，位置=%v", source)
 
@@ -334,7 +351,7 @@ func (c *Client) ensureWaterBucket(ctx context.Context, radius int) error {
 		return ctx.Err()
 	}
 	scoopFace := cube.FaceUp
-	if stand, ok := standingBeside(c, source); ok {
+	if standOK {
 		c.WalkTo(mgl32.Vec3{float32(stand.X()) + 0.5, float32(stand.Y()), float32(stand.Z()) + 0.5})
 		scoopFace = faceFromAdjacent(source, stand)
 	}
@@ -499,13 +516,24 @@ func findEmptyBucket(c *Client) (int, error) {
 }
 
 func findNearbyWaterSource(c *Client, radius int) (cube.Pos, bool) {
-	if c.World() == nil || c.Self == nil {
+	sources := findNearbyWaterSources(c, radius)
+	if len(sources) == 0 {
 		return cube.Pos{}, false
 	}
+	return sources[0], true
+}
+
+// findNearbyWaterSources returns every water source block within radius
+// blocks of the player's current position, sorted from closest to farthest.
+// Returning every candidate (rather than only the single closest one) lets
+// callers skip sources that turn out to have no reachable standing spot
+// instead of retrying the same unreachable source forever.
+func findNearbyWaterSources(c *Client, radius int) []cube.Pos {
+	if c.World() == nil || c.Self == nil {
+		return nil
+	}
 	center := BlockPosFromVec3(c.Self.Position)
-	bestDistance := int(^uint(0) >> 1)
-	var best cube.Pos
-	found := false
+	var sources []cube.Pos
 	for x := center.X() - radius; x <= center.X()+radius; x++ {
 		for y := center.Y() - radius; y <= center.Y()+radius; y++ {
 			for z := center.Z() - radius; z <= center.Z()+radius; z++ {
@@ -515,15 +543,15 @@ func findNearbyWaterSource(c *Client, radius int) (cube.Pos, bool) {
 				}
 				name, _ := c.World().Block(pos).EncodeBlock()
 				if isWaterSourceName(name) {
-					distance := (x-center.X())*(x-center.X()) + (y-center.Y())*(y-center.Y()) + (z-center.Z())*(z-center.Z())
-					if !found || distance < bestDistance {
-						best, bestDistance, found = pos, distance, true
-					}
+					sources = append(sources, pos)
 				}
 			}
 		}
 	}
-	return best, found
+	sort.Slice(sources, func(i, j int) bool {
+		return distanceSquared(sources[i], center) < distanceSquared(sources[j], center)
+	})
+	return sources
 }
 
 func isWaterSourceName(name string) bool {

@@ -97,6 +97,7 @@ func (e EventsListener) Attach(c *Client) {
 	AddListener(c, PacketHandler[*packet.LevelChunk]{
 		Priority: 64,
 		F: func(client *Client, p *packet.LevelChunk) error {
+			log.Infof("LevelChunk pos=%v subChunkCount=%d cacheEnabled=%v payloadLen=%d", p.Position, p.SubChunkCount, p.CacheEnabled, len(p.RawPayload))
 			ch, err := chunk.NetworkDecode(e.air, p.RawPayload, int(p.SubChunkCount), e.dimensionData[e.currentDimension])
 			if err != nil {
 				log.Warnf("Failed to decode chunk: %v", err)
@@ -212,7 +213,7 @@ func (e EventsListener) Attach(c *Client) {
 		Priority: 64,
 		F: func(client *Client, p *packet.MovePlayer) error {
 			if p.EntityRuntimeID == c.Conn.GameData().EntityRuntimeID {
-				//log.Info("Moved", p.Position)
+				log.Infof("MovePlayer recv pos=%v mode=%v onGround=%v", p.Position, p.Mode, p.OnGround)
 
 				c.Self.Position = p.Position
 				c.Self.Yaw = p.Yaw

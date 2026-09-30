@@ -44,6 +44,12 @@ type PlayerStatus struct {
 	PlayerName   string
 	CurrentForm  *Form
 	GameMode     int
+
+	// lastAuthPosition and lastAuthValid track the last Position reported via
+	// a PlayerAuthInput packet, so that subsequent packets can compute an
+	// honest Delta/MoveVector rather than always sending {0,0,0}.
+	lastAuthPosition mgl32.Vec3
+	lastAuthValid    bool
 }
 
 type Client struct {
@@ -108,9 +114,20 @@ func (c *Client) ConnectTo(config ClientConfig) error {
 	serverConn, err := minecraft.Dialer{
 		TokenSource: tkn,
 		ClientData: login.ClientData{
-			DeviceModel:   "WTF OS 1.0",
-			DeviceOS:      protocol.DeviceAndroid,
-			GameVersion:   "1.20.51",
+			DeviceModel: "WTF OS 1.0",
+			DeviceOS:    protocol.DeviceAndroid,
+			// GameVersion must match the protocol version gophertunnel/dragonfly
+			// actually implement (protocol.CurrentVersion), not a hardcoded,
+			// stale version string. Servers that support multiple client
+			// versions (e.g. via Geyser or a custom multi-version proxy) use
+			// this field to decide which block-state palette to translate
+			// chunk data into for this connection. Reporting an older,
+			// mismatched GameVersion here caused the server to send chunk
+			// data encoded against a different (older) block palette than
+			// the one Dragonfly's bundled block tables expect, so runtime
+			// IDs decoded to unrelated blocks (e.g. a stone_stairs
+			// neighbour reading back as "bed" or "slime").
+			GameVersion:   protocol.CurrentVersion,
 			LanguageCode:  "zh_TW",
 			ServerAddress: config.Address,
 		},
@@ -123,6 +140,9 @@ func (c *Client) ConnectTo(config ClientConfig) error {
 }
 
 func (c *Client) HandleGame() error {
+	gd := c.Conn.GameData()
+	log.Infof("GameData: useBlockNetworkIDHashes=%v customBlocks=%d serverBlockStateChecksum=%d chunkRadius=%d",
+		gd.UseBlockNetworkIDHashes, len(gd.CustomBlocks), gd.ServerBlockStateChecksum, gd.ChunkRadius)
 	lastTime := time.Now()
 	exited := atomic.NewBool(false)
 	go func() {

@@ -37,6 +37,13 @@ func (f Finder[_]) AllowStanding(n cube.Pos) bool {
 	b2 := f.w.Block(n.Side(cube.FaceUp))
 	b3 := f.w.Block(n.Side(cube.FaceDown))
 
+	if f.c != nil && f.c.Logger != nil {
+		bName, _ := b.EncodeBlock()
+		b2Name, _ := b2.EncodeBlock()
+		b3Name, _ := b3.EncodeBlock()
+		f.c.Logger.Infof("AllowStanding n=%v b=%s(%T) b2=%s(%T) b3=%s(%T)", n, bName, b.Model(), b2Name, b2.Model(), b3Name, b3.Model())
+	}
+
 	if !f.allowFlight {
 		if _, ok := b3.Model().(model.Empty); ok {
 			return false
@@ -103,6 +110,7 @@ func (c *Client) FlyTo(position mgl32.Vec3) {
 	c.flyLock.Lock()
 	c.internalFlyTo(position)
 }
+
 // walkTickInterval matches the server's tick rate (20 ticks/second) so that
 // position updates sent via PlayerAuthInput look like normal, physically
 // plausible movement instead of teleports.
@@ -120,6 +128,7 @@ const maxWalkStepPerTick = 0.2158
 func (c *Client) WalkTo(position mgl32.Vec3) {
 	pos := cube.Pos{int(position[0]), int(position[1]), int(position[2])}
 	paths := c.FindPath(pos)
+	c.Logger.Infof("WalkTo target=%v pathLen=%d", position, len(paths))
 	for _, path := range paths {
 		target := mgl32.Vec3{float32(path[0]) + 0.5, float32(path[1]) + 1.62, float32(path[2]) + 0.5}
 		c.stepTowards(target)
@@ -132,6 +141,7 @@ func (c *Client) WalkTo(position mgl32.Vec3) {
 // server's movement validation sees a realistic walking speed rather than a
 // single large jump that gets rejected/corrected.
 func (c *Client) stepTowards(target mgl32.Vec3) {
+	c.Logger.Infof("stepTowards start=%v target=%v", c.Self.Position, target)
 	for {
 		next, arrived := nextWalkStep(c.Self.Position, target, maxWalkStepPerTick)
 		c.Self.Position = next
@@ -183,15 +193,63 @@ func FromBlockPos(v mgl32.Vec3) mgl32.Vec3 {
 
 var eyeY = mgl32.Vec3{0, 1.62, 0}
 
-func (c *Client) SendCurrentPosition() {
+// yawFromDelta computes the Bedrock yaw (in degrees; 0 = south/+Z, 90 =
+// west/-X, matching the engine's rotate-clockwise-from-above convention) that
+// corresponds to a horizontal movement delta (dx, dz).
+func yawFromDelta(dx, dz float32) float32 {
+	yaw := float32(math.Atan2(float64(-dx), float64(dz)) * 180 / math.Pi)
+	if yaw < 0 {
+		yaw += 360
+	}
+	return yaw
+}
+
+// sendAuthInput builds and sends a PlayerAuthInput packet. Earlier versions
+// of this code only filled in Position/Pitch/Yaw/HeadYaw/Tick, leaving
+// InputMode, PlayMode and InteractionModel at their zero value and
+// MoveVector/Delta/AnalogueMoveVector/RawMoveVector at {0,0(,0)}. A real
+// client never reports InputMode 0 (valid values start at 1) and always
+// reports a MoveVector/Delta consistent with how far it actually moved that
+// tick. Servers that authoritatively validate movement use exactly these
+// fields to sanity-check (and otherwise silently reject or ignore) the
+// reported Position, which is why WalkTo previously updated the bot's local
+// Self.Position without the character ever visibly moving in-game.
+func (c *Client) sendAuthInput(position mgl32.Vec3, inputData protocol.Bitset) {
+	delta := position.Sub(c.lastAuthPosition)
+	if !c.lastAuthValid {
+		delta = mgl32.Vec3{}
+	}
+
+	moveVector := mgl32.Vec2{}
+	if horizontal := (mgl32.Vec2{delta.X(), delta.Z()}); horizontal.Len() > 1e-4 {
+		yaw := yawFromDelta(delta.X(), delta.Z())
+		c.Self.Yaw = yaw
+		c.Self.HeadYaw = yaw
+		moveVector = mgl32.Vec2{0, 1}
+	}
+
+	c.lastAuthPosition = position
+	c.lastAuthValid = true
+
 	c.Conn.WritePacket(&packet.PlayerAuthInput{
-		InputData: protocol.NewBitset(packet.PlayerAuthInputBitsetSize),
-		Position:  c.Self.Position,
-		Pitch:     c.Self.Pitch,
-		Yaw:       c.Self.Yaw,
-		HeadYaw:   c.Self.HeadYaw,
-		Tick:      c.inputTick.Add(1),
+		InputData:          inputData,
+		Position:           position,
+		Pitch:              c.Self.Pitch,
+		Yaw:                c.Self.Yaw,
+		HeadYaw:            c.Self.HeadYaw,
+		InputMode:          packet.InputModeMouse,
+		PlayMode:           packet.PlayModeNormal,
+		InteractionModel:   packet.InteractionModelCrosshair,
+		Tick:               c.inputTick.Add(1),
+		Delta:              delta,
+		MoveVector:         moveVector,
+		AnalogueMoveVector: moveVector,
+		RawMoveVector:      moveVector,
 	})
+}
+
+func (c *Client) SendCurrentPosition() {
+	c.sendAuthInput(c.Self.Position, protocol.NewBitset(packet.PlayerAuthInputBitsetSize))
 }
 
 func (c *Client) SendInputData(flags ...int) {
@@ -199,26 +257,11 @@ func (c *Client) SendInputData(flags ...int) {
 	for _, flag := range flags {
 		inputData.Set(flag)
 	}
-
-	c.Conn.WritePacket(&packet.PlayerAuthInput{
-		InputData: inputData,
-		Position:  c.Self.Position,
-		Pitch:     c.Self.Pitch,
-		Yaw:       c.Self.Yaw,
-		HeadYaw:   c.Self.HeadYaw,
-		Tick:      c.inputTick.Add(1),
-	})
+	c.sendAuthInput(c.Self.Position, inputData)
 }
 
 func (c *Client) SendCustomPosition(position mgl32.Vec3) {
-	c.Conn.WritePacket(&packet.PlayerAuthInput{
-		InputData: protocol.NewBitset(packet.PlayerAuthInputBitsetSize),
-		Position:  position,
-		Pitch:     c.Self.Pitch,
-		Yaw:       c.Self.Yaw,
-		HeadYaw:   c.Self.HeadYaw,
-		Tick:      c.inputTick.Add(1),
-	})
+	c.sendAuthInput(position, protocol.NewBitset(packet.PlayerAuthInputBitsetSize))
 }
 
 func (c *Client) internalFlyTo(position mgl32.Vec3) {
